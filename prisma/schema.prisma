@@ -1,0 +1,82 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  userId Int @id @default(autoincrement())
+  username String @unique @db.VarChar(255)
+  password String  
+  name String? 
+  topics Topic[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now())
+}
+
+model Topic {
+  topicId Int @id @default(autoincrement())
+  name String
+  description String?
+  user User @relation(fields: [userId], references: [userId])
+  userId Int @unique
+  criterias Criteria[]
+  dss Dss[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now())
+}
+
+model Criteria {
+  criteriaId Int @id @default(autoincrement())
+  name String
+  type CriteriaType @default(BENEFIT)
+  weight Float
+  parentCriteriaId Int? @unique
+  parentCriteria Criteria? @relation("ParentCriteria", fields: [parentCriteriaId], references: [criteriaId])
+  childCriterias Criteria[] @relation("ParentCriteria")
+  topic Topic @relation(fields: [topicId], references: [topicId])
+  topicId Int @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now())
+}
+
+enum CriteriaType {
+  COST
+  BENEFIT
+}
+
+model Dss {
+  dssId Int @id @default(autoincrement())
+  topic Topic @relation(fields: [topicId], references: [topicId])
+  topicId Int @unique
+  method DssMethodType
+  dssAlternatives DssAlternative[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now())
+}
+
+enum DssMethodType {
+  WP
+  SAW
+  TOPSIS
+}
+
+model DssAlternative {
+  dssAlternativeId Int @id @default(autoincrement())
+  dss Dss @relation(fields: [dssId], references: [dssId])
+  dssId Int @unique
+  alternativeName String
+  sValue Float
+  rankValue Int 
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now())
+}
