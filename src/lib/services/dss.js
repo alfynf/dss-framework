@@ -228,10 +228,19 @@ export const calculateDss = async (dssId, method) => {
         const result = calculateTopsis(alternatives, criterias)
         // console.log("method result: ", result);
     };
-    const ranking = methodResult
+
+    let ranking = []
+
+    if (method == DssMethodType.TOPSIS) {
+        ranking = methodResult
+            .sort((a, b) => b.score - a.score)
+            .map((item, index) => ({ ...item, ranking: index + 1 }));  
+    } else {
+        ranking = methodResult
             .map(([alternativeId, score]) => ({ alternativeId: Number(alternativeId), score })) 
             .sort((a, b) => b.score - a.score)
             .map((item, index) => ({ ...item, ranking: index + 1 }));   
+    }
     
     console.log("ranking: ", ranking)
     await saveDssScore(dssId, ranking);
