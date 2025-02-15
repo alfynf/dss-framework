@@ -225,14 +225,15 @@ export const calculateDss = async (dssId, method) => {
         const normalizedAlternatives = normalizeSawAlternatives(criterias, alternatives);
         methodResult = Object.entries(calculateSAW(weightMap, normalizedAlternatives, criterias))   
     } else if (method == DssMethodType.TOPSIS) {
-        methodResult = Object.entries(calculateTopsis(alternatives, criterias)).map(item => item[1])
+        const result = calculateTopsis(alternatives, criterias)
+        // console.log("method result: ", result);
     };
     const ranking = methodResult
             .map(([alternativeId, score]) => ({ alternativeId: Number(alternativeId), score })) 
             .sort((a, b) => b.score - a.score)
             .map((item, index) => ({ ...item, ranking: index + 1 }));   
     
-    // console.log("ranking: ", ranking)
+    console.log("ranking: ", ranking)
     await saveDssScore(dssId, ranking);
     return;
 };
@@ -370,62 +371,12 @@ function calculateSAW(
     return scores;
 }
 
-
-function calculateAggregatedValues(alternatives, criterias) {
-    let criteriaMap = Object.fromEntries(criterias.map(c => [c.criteriaId, { ...c, children: [] }]));
-
-    // Bangun tree kriteria (Hubungkan parent dengan children)
-    criterias.forEach(c => {
-        if (c.parentCriteriaId !== null) {
-            criteriaMap[c.parentCriteriaId].children.push(criteriaMap[c.criteriaId]);
-        }
-    });
-
-    // Rekursif buat ngitung nilai tiap root criteria
-    function aggregateValues(criterion, altValues) {
-        if (criterion.children.length === 0) {
-            return altValues[criterion.criteriaId] || 0;
-        }
-
-        return criterion.children.reduce((sum, child) => {
-            return sum + (aggregateValues(child, altValues) * child.weight);
-        }, 0);
-    }
-
-    return alternatives.map(alt => ({
-        alternativeId: alt.alternativeId,
-        name: alt.name,
-        values: Object.fromEntries(
-            Object.values(criteriaMap)
-                .filter(c => c.parentCriteriaId === null) // Ambil root criteria aja
-                .map(c => [c.criteriaId, aggregateValues(c, alt.values)])
-        ),
-    }));
-}
-
 function calculateTopsis(alternatives, criterias) {
-    alternatives = calculateAggregatedValues(alternatives, criterias);
+    const dNorm = normalizeTopsisAlternatives(criterias, alternatives);
 
-    const criteriaIds = criterias.filter(c => c.parentCriteriaId === null).map(c => c.criteriaId);
+    const criteriaIds = criterias.map(c => c.criteriaId);
 
-    // 1️⃣ Normalisasi Matriks Keputusan
-    let sumSquares = {};
-    criteriaIds.forEach(cId => {
-        sumSquares[cId] = Math.sqrt(
-            alternatives.reduce((sum, alt) => sum + Math.pow(alt.values[cId] || 0, 2), 0)
-        );
-    });
-
-    let normalizedMatrix = alternatives.map(alt => ({
-        alternativeId: alt.alternativeId,
-        name: alt.name,
-        values: Object.fromEntries(
-            criteriaIds.map(cId => [cId, (alt.values[cId] || 0) / (sumSquares[cId] || 1)])
-        ),
-    }));
-
-    // 2️⃣ Normalisasi Bobot (Weighted Normalized Decision Matrix)
-    let weightedMatrix = normalizedMatrix.map(alt => ({
+    let weightedMatrix = dNorm.map(alt => ({
         alternativeId: alt.alternativeId,
         name: alt.name,
         values: Object.fromEntries(
@@ -436,17 +387,18 @@ function calculateTopsis(alternatives, criterias) {
         ),
     }));
 
-    // 3️⃣ Tentuin A⁺ & A⁻
+    let gabungan = calculateRecursiveValues(criterias, weightedMatrix)
+    console.log("gabungan: ", gabungan)
+
     let idealBest = {}, idealWorst = {};
     criteriaIds.forEach(cId => {
         let isBenefit = criterias.find(c => c.criteriaId === cId)?.type === "BENEFIT";
-        let values = weightedMatrix.map(alt => alt.values[cId]);
+        let values = gabungan.map(alt => alt.values[cId]);
         idealBest[cId] = isBenefit ? Math.max(...values) : Math.min(...values);
         idealWorst[cId] = isBenefit ? Math.min(...values) : Math.max(...values);
     });
 
-    // 4️⃣ Hitung D⁺ & D⁻
-    let scores = weightedMatrix.map(alt => {
+    let scores = gabungan.map(alt => {
         let dPlus = Math.sqrt(
             criteriaIds.reduce((sum, cId) => sum + Math.pow(alt.values[cId] - idealBest[cId], 2), 0)
         );
@@ -461,4 +413,71 @@ function calculateTopsis(alternatives, criterias) {
     });
 
     return scores;
+}
+
+function calculateRecursiveValues(criterias, alternatives) {
+    // Buat mapping criteria berdasarkan ID
+    const criteriaMap = Object.fromEntries(criterias.map(c => [c.criteriaId, c]));
+    console.log("criteriaMap: ", criteriaMap);
+
+    // Fungsi rekursif untuk menghitung nilai root criteria
+    function computeCriteriaValue(criteriaId, values) {
+        const criteria = criteriaMap[criteriaId];
+        if (!criteria) return 0; // Jika tidak ditemukan, return 0
+
+        // Cari subcriteria
+        const subCriteria = criterias.filter(c => c.parentCriteriaId === criteriaId);
+        
+        if (subCriteria.length === 0) {
+            // Jika ini adalah leaf node (kriteria tanpa subcriteria), gunakan nilai langsung
+            return values[criteriaId] || 0;
+        }
+
+        // Hitung nilai berdasarkan subcriteria
+        let value = 1;
+        subCriteria.forEach(sub => {
+            const subValue = computeCriteriaValue(sub.criteriaId, values); // Rekursi ke subcriteria
+            value *= subValue * sub.weight; // Kalikan hasil perhitungan subcriteria dengan bobotnya
+        });
+
+        // Kalikan dengan bobot root criteria setelah semua subcriteria dihitung
+        return value * criteria.weight;
+    }
+
+    // Iterasi untuk setiap alternatif
+    alternatives.forEach(alt => {
+        criterias.forEach(root => {
+            if (root.parentCriteriaId === null) {
+                // Hanya hitung untuk root criteria (parentCriteriaId === null)
+                alt.values[root.criteriaId] = computeCriteriaValue(root.criteriaId, alt.values);
+            }
+        });
+    });
+
+    return alternatives;
+}
+  
+
+function normalizeTopsisAlternatives(criteria, alternatives) {
+    let sumSquares = {};
+
+    // Step 1: Hitung SUMSQ (ΣX²) per kriteria
+    criteria.forEach((criterion) => {
+        sumSquares[criterion.criteriaId] = alternatives
+            .map((alt) => alt.values[criterion.criteriaId] || 0)
+            .reduce((sum, val) => sum + val ** 2, 0);
+    });
+
+    // Step 2: Normalisasi Matriks Keputusan (DNorm)
+    let DNorm = alternatives.map((alt) => {
+        let normValues = {};
+        Object.keys(alt.values).forEach((key) => {
+            let criteriaId = Number(key);
+            let sumSq = sumSquares[criteriaId];
+            normValues[criteriaId] = sumSq !== 0 ? alt.values[criteriaId] / Math.sqrt(sumSq) : 0;
+        });
+        return { alternativeId: alt.alternativeId, name: alt.name, values: normValues };
+    });
+
+    return DNorm;
 }
